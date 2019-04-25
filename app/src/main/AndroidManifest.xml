@@ -24,15 +24,18 @@
         <service
             android:name=".activities.Video.ScreenShareService"
             android:enabled="true"
-            android:exported="true"></service>
+            android:exported="true">
+        </service>
 
         <activity
             android:name=".activities.Video.VideoViewActivity"
+            android:theme="@style/AppTheme.NoActionBar"
             android:label="No Users Streaming"
             android:screenOrientation="portrait" />
         <activity
             android:name=".activities.Video.VideoMenuActivity"
-            android:label="Streaming" />
+            android:label="Streaming"
+            android:launchMode="singleTask"/>
         <activity
             android:name=".activities.Video.VideoStreamActivity"
             android:label="Live Streaming"

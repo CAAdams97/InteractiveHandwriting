@@ -355,9 +355,11 @@ public class RoomActivity extends AppCompatActivity {
         ncNetworkConnection.discover();
         Intent killService = new Intent(this, ScreenShareService.class);
         stopService(killService);
-        Toast.makeText(RoomActivity.this, "Screen share ending", Toast.LENGTH_LONG).show();
-        networkLayer.sendBytes(new byte[] {}, NetworkMessageType.STREAM_ENDED);
-        ScreenShareService.isStreaming = false;
+        if (ScreenShareService.isStreaming) {
+            Toast.makeText(RoomActivity.this, "Screen share ending", Toast.LENGTH_LONG).show();
+            networkLayer.sendBytes(new byte[]{}, NetworkMessageType.STREAM_ENDED);
+            ScreenShareService.isStreaming = false;
+        }
         super.onBackPressed();
     }
 

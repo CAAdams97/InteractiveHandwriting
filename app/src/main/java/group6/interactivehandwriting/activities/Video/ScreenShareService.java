@@ -7,7 +7,9 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.graphics.Bitmap;
+import android.graphics.Matrix;
 import android.graphics.PixelFormat;
 import android.graphics.Point;
 import android.hardware.display.DisplayManager;
@@ -38,11 +40,15 @@ public class ScreenShareService extends Service {
 
     private static NotificationManager notificationManager;
 
-    private final int STREAM_QUALITY = 15;
+    private static int streamQuality = 10;
+
+    private static final int MAX_QUALITY = 50;
+    private static final int MIN_QUALITY = 1;
+    private static final float MIN_QUALITY_FACTOR = 0.65f;
+    private static final float DESIRED_QUALITY_FACTOR = 0.9f;
 
     private static int frameCount;
     private static long curStartTime;
-
 
     @Override
     public IBinder onBind(Intent intent) {
@@ -55,7 +61,6 @@ public class ScreenShareService extends Service {
     public int onStartCommand (Intent intent, int flags, int startId) {
 
         startForeground(1338, createNotification());
-
 
         System.out.println("Screen Share Service Started");
 
@@ -70,19 +75,17 @@ public class ScreenShareService extends Service {
         int density = metrics.densityDpi;
         frameCount = 0;
 
-        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 1);
+        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
         final Handler handler = new Handler();
 
         int vdFlags = DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY | DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC;
-        //mediaProjection.createVirtualDisplay("screen-mirror", width, height, density, vdFlags, imageReader.getSurface(), null, handler);
         mediaProjection.createVirtualDisplay("screen-mirror", width, height, density, vdFlags, imageReader.getSurface(), null, null);
         imageReader.setOnImageAvailableListener(new ImageReader.OnImageAvailableListener() {
             @Override
             public void onImageAvailable(ImageReader reader) {
                 reader.setOnImageAvailableListener(this, handler);
 
-//                Image image = imageReader.acquireLatestImage();
-                Image image = imageReader.acquireNextImage();
+                Image image = imageReader.acquireLatestImage();
 
                 if (image == null) {
                     return;
@@ -95,15 +98,27 @@ public class ScreenShareService extends Service {
                 int rowStride = planes[0].getRowStride();
                 int rowPadding = rowStride - pixelStride * metrics.widthPixels;
 
-                // create bitmap
                 Bitmap bmp = Bitmap.createBitmap(metrics.widthPixels + (int) ((float) rowPadding / (float) pixelStride), metrics.heightPixels, Bitmap.Config.ARGB_8888);
+
                 bmp.copyPixelsFromBuffer(buffer);
 
-                // network stuff:
                 Bitmap realSizeBitmap = Bitmap.createBitmap(bmp, 0, 0, metrics.widthPixels, bmp.getHeight());
 
+                if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE) {
+                    Matrix matrix = new Matrix();
+                    matrix.postRotate(90);
+
+                    int bitmapHeight = realSizeBitmap.getHeight();
+                    int bitmapWidth = realSizeBitmap.getWidth();
+                    float aspectRatio = (float) realSizeBitmap.getHeight() / realSizeBitmap.getWidth();
+                    int newHeight = (int) Math.ceil(realSizeBitmap.getWidth() / aspectRatio);
+
+
+                    realSizeBitmap = Bitmap.createBitmap(realSizeBitmap, 0, (bitmapHeight - newHeight) / 2, bitmapWidth, newHeight, matrix, true);
+                }
+
                 ByteArrayOutputStream bitmapStream = new ByteArrayOutputStream();
-                realSizeBitmap.compress(Bitmap.CompressFormat.JPEG, STREAM_QUALITY, bitmapStream);
+                realSizeBitmap.compress(Bitmap.CompressFormat.JPEG, streamQuality, bitmapStream);
                 System.out.println("Sharing:  "  + bitmapStream.size());
                 byte[] bitmapByteArray = bitmapStream.toByteArray();
                 networkLayer.sendBytes(bitmapByteArray, NetworkMessageType.VIDEO_STREAM);
@@ -134,8 +149,8 @@ public class ScreenShareService extends Service {
         super.onDestroy();
     }
 
-    private double getFPS() {
-        return frameCount / ((java.lang.System.currentTimeMillis() - curStartTime) / 1000.0);
+    private static float getFPS() {
+        return (float) (frameCount / ((java.lang.System.currentTimeMillis() - curStartTime) / 1000.0));
     }
 
     public static void setCurStartTime(long curStartTimeIn) {
@@ -147,10 +162,11 @@ public class ScreenShareService extends Service {
         NotificationCompat.Builder builder = new NotificationCompat.Builder(this, "screen_sharing");
 
         Intent notificationIntent = new Intent(this, VideoMenuActivity.class);
-        PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, 0);
+        notificationIntent.setFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+        PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_UPDATE_CURRENT);
 
         builder.setContentTitle("Screen Sharing")
-                .setContentText("Screen Sharing")
+                .setContentText("Click to return to screen share menu")
                 .setContentIntent(pendingIntent)
                 .setTicker("Screen Sharing")
                 .setSmallIcon(R.drawable.ic_screen_share_white_24dp)
@@ -163,6 +179,36 @@ public class ScreenShareService extends Service {
         builder.setChannelId(channelId);
 
         return builder.build();
+    }
+
+    private static void adjustStreamQuality(boolean increaseQuality) {
+        if (increaseQuality) {
+            int newQuality = streamQuality + 5;
+            if (newQuality > MAX_QUALITY) {
+                newQuality = MAX_QUALITY;
+            }
+            streamQuality = newQuality;
+        }
+        else {
+            int newQuality = streamQuality - 5;
+            if (newQuality < MIN_QUALITY) {
+                newQuality = MIN_QUALITY;
+            }
+            streamQuality = newQuality;
+        }
+    }
+
+    public static void compareFPS(float receiverFPS) {
+        float senderFPS = getFPS();
+        if (senderFPS * MIN_QUALITY_FACTOR > receiverFPS) {
+            adjustStreamQuality(false);
+        }
+        else if (receiverFPS > senderFPS * DESIRED_QUALITY_FACTOR) {
+            adjustStreamQuality(true);
+        }
+
+        curStartTime = java.lang.System.currentTimeMillis();
+        frameCount = 0;
     }
 
 }
